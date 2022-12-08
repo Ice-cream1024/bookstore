@@ -1,9 +1,15 @@
 import jwt
 import time
 import logging
-import sqlite3 as sqlite
 from be.model import error
 from be.model import db_conn
+import sqlalchemy
+from sqlalchemy import Column, String, create_engine, Integer, Text, Date
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
+from be.model import init_book_db,store
+import re
+from sqlalchemy import or_, and_
 
 # encode a json string like:
 #   {
@@ -57,18 +63,15 @@ class User(db_conn.DBConn):
         try:
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            self.conn.execute(
-                "INSERT into user(user_id, password, balance, token, terminal) "
-                "VALUES (?, ?, ?, ?, ?);",
-                (user_id, password, 0, token, terminal), )
+            self.conn.add(store.Users(user_id=user_id, password=password, balance=0, token=token, terminal=terminal))
             self.conn.commit()
-        except sqlite.Error:
+        except sqlalchemy.exc.IntegrityError:
             return error.error_exist_user_id(user_id)
         return 200, "ok"
 
     def check_token(self, user_id: str, token: str) -> (int, str):
-        cursor = self.conn.execute("SELECT token from user where user_id=?", (user_id,))
-        row = cursor.fetchone()
+        cursor = self.conn.query(store.Users.token).filter(store.Users.user_id == user_id)
+        row = cursor.first()
         if row is None:
             return error.error_authorization_fail()
         db_token = row[0]
@@ -77,8 +80,8 @@ class User(db_conn.DBConn):
         return 200, "ok"
 
     def check_password(self, user_id: str, password: str) -> (int, str):
-        cursor = self.conn.execute("SELECT password from user where user_id=?", (user_id,))
-        row = cursor.fetchone()
+        cursor = self.conn.query(store.Users.password).filter(store.Users.user_id == user_id)
+        row = cursor.first()
         if row is None:
             return error.error_authorization_fail()
 
@@ -95,16 +98,12 @@ class User(db_conn.DBConn):
                 return code, message, ""
 
             token = jwt_encode(user_id, terminal)
-            cursor = self.conn.execute(
-                "UPDATE user set token= ? , terminal = ? where user_id = ?",
-                (token, terminal, user_id), )
-            if cursor.rowcount == 0:
+            cursor = self.conn.query(store.Users).filter(store.Users.user_id == user_id).update({'token':token,'terminal':terminal})   
+            if cursor == None:
                 return error.error_authorization_fail() + ("", )
             self.conn.commit()
-        except sqlite.Error as e:
+        except sqlalchemy.exc.IntegrityError as e:
             return 528, "{}".format(str(e)), ""
-        except BaseException as e:
-            return 530, "{}".format(str(e)), ""
         return 200, "ok", token
 
     def logout(self, user_id: str, token: str) -> bool:
@@ -116,37 +115,28 @@ class User(db_conn.DBConn):
             terminal = "terminal_{}".format(str(time.time()))
             dummy_token = jwt_encode(user_id, terminal)
 
-            cursor = self.conn.execute(
-                "UPDATE user SET token = ?, terminal = ? WHERE user_id=?",
-                (dummy_token, terminal, user_id), )
-            if cursor.rowcount == 0:
+            cursor = self.conn.query(store.Users).filter(store.Users.user_id == user_id).update({'token':dummy_token,'terminal':terminal})
+            if cursor == None:
                 return error.error_authorization_fail()
 
             self.conn.commit()
-        except sqlite.Error as e:
+        except sqlalchemy.exc.IntegrityError as e:
             return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
         return 200, "ok"
 
     def unregister(self, user_id: str, password: str) -> (int, str):
-        try:
-            code, message = self.check_password(user_id, password)
-            if code != 200:
-                return code, message
-
-            cursor = self.conn.execute("DELETE from user where user_id=?", (user_id,))
-            if cursor.rowcount == 1:
-                self.conn.commit()
-            else:
-                return error.error_authorization_fail()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+        user = self.conn.query(store.Users).filter(store.Users.user_id == user_id).first()
+        if user == None:
+            code, message = error.error_authorization_fail()
+            return code, message
+        if password != user.password:
+            code, message = error.error_authorization_fail()
+            return code, message
+        self.conn.query(store.Users).filter(store.Users.user_id == user_id).delete()
+        self.conn.commit()
         return 200, "ok"
 
-    def change_password(self, user_id: str, old_password: str, new_password: str) -> bool:
+    def change_password(self, user_id: str, old_password: str, new_password: str):
         try:
             code, message = self.check_password(user_id, old_password)
             if code != 200:
@@ -154,16 +144,13 @@ class User(db_conn.DBConn):
 
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            cursor = self.conn.execute(
-                "UPDATE user set password = ?, token= ? , terminal = ? where user_id = ?",
-                (new_password, token, terminal, user_id), )
-            if cursor.rowcount == 0:
+            cursor = self.conn.query(store.Users).filter(store.Users.user_id == user_id).update({'password':new_password,'token':token,'terminal':terminal})
+            if cursor == None:
                 return error.error_authorization_fail()
-
             self.conn.commit()
-        except sqlite.Error as e:
+        except sqlalchemy.exc.IntegrityError as e:
             return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
         return 200, "ok"
+
+
 
