@@ -63,4 +63,57 @@ class Seller():
             return 540, "{}".format(str(e))
         return 200, "ok"
 
-    def add_stock_level(self, user_id: str, store_id: str, book_id: str):
+    def add_stock_level(self, user_id: str, store_id: str, book_id: str, add_stock_level: int):
+        try:
+            if not self.user_id_exist(user_id):
+                return error.error_non_exist_user_id(user_id)
+            if not self.store_id_exist(store_id):
+                return error.error_exist_store_id(store_id)
+            if not self.book_id_exist(book_id):
+                return error.error_non_exist_book_id(book_id)
+
+            book_info = self.session.query(Book_info).filter(store_id == store_id, book_id == book_id).first()
+
+            book_info.inventory_count += add_stock_level
+            self.session.commit()
+            self.session.close()
+
+        except BaseException as e:
+            return 530, "{}".format(str(e))
+        return 200, "ok"
+
+    def deliver(self, user_id: str, order_id: str) -> (int, str):
+        try:
+            if not self.user_id_exist(user_id):
+                return error.error_non_exist_user_id(user_id)
+
+            cursor = self.session.query(Order).filter_by(id=order_id, status=Order_status.paid)
+            order = cursor.first()
+            if order is None:
+                return error.error_invalid_order_id(order_id)
+            
+            store_id = order.store_id
+            if self.session.query(Store).filter_by(store_id=store_id, owner=user_id).first() is None:
+                return error.error_authorization_fail()
+            
+            cursor = self.session.query(Order).filter_by(id=order_id, status=Order_status.paid)
+            rowcount = cursor.update({Order.status: Order_status.delivering})
+            if rowcount == 0:
+                return error.error_invalid_order_id(order_id)
+
+            self.session.commit()
+            self.session.close()
+            
+        except BaseException as e:
+            return 530, "{}".format(str(e))
+        return 200, "ok"
+
+    def user_id_exist(self, user_id):
+        return self.session.query(User).filter(User.user_id == user_id).first() is not None
+
+    def book_id_exist(self, store_id, book_id):
+        return self.session.query(Book_info).filter(Book_info.store_id == store_id,
+                                                    Book_info.id == book_id).first() is not None
+
+    def store_id_exist(self, store_id):
+        return self.session.query(Store).filter(Store.store_id == store_id).first() is not None
